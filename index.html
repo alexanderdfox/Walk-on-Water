@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Walking on Water</title>
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+			cursor: none;
+		}
+
+		body, html {
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			background-color: #001122;
+		}
+
+		#canvas {
+			position: absolute;
+			top: 0;
+			left: 0;
+			width: 100%;
+			height: 100%;
+			z-index: 1;
+		}
+
+		.custom-cursor {
+			position: fixed;
+			pointer-events: none;
+			width: 80px;
+			height: 80px;
+			background-image: url('jesus.png');
+			background-size: contain;
+			background-repeat: no-repeat;
+			background-position: center;
+			transform: translate(-50%, -85%);
+			z-index: 9999;
+			display: block;
+			filter: drop-shadow(0 10px 15px rgba(0,0,0,0.6));
+		}
+	</style>
+</head>
+<body>
+	<div class="custom-cursor" id="cursor"></div>
+	<canvas id="canvas"></canvas>
+
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+	<script>
+		// Scene setup
+		const scene = new THREE.Scene();
+		const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+		const renderer = new THREE.WebGLRenderer({ 
+			canvas: document.getElementById('canvas'),
+			antialias: true 
+		});
+		renderer.setSize(window.innerWidth, window.innerHeight);
+		renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+		// Camera closer for full-screen water immersion
+		camera.position.set(0, 8, 18);
+		camera.lookAt(0, 0, 0);
+
+		// Lighting for realistic water
+		const ambientLight = new THREE.AmbientLight(0x446688, 0.7);
+		scene.add(ambientLight);
+
+		const directionalLight = new THREE.DirectionalLight(0xaaddff, 1.4);
+		directionalLight.position.set(15, 35, 25);
+		scene.add(directionalLight);
+
+		const pointLight = new THREE.PointLight(0xffddaa, 1.8, 200);
+		pointLight.position.set(-20, 20, -15);
+		scene.add(pointLight);
+
+		// Large water plane to fill the entire view
+		const waterGeometry = new THREE.PlaneGeometry(300, 300, 280, 280);
+		const waterMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				time: { value: 0 },
+				color: { value: new THREE.Color(0x0066aa) }
+			},
+			vertexShader: `
+				uniform float time;
+				varying vec2 vUv;
+				varying vec3 vNormal;
+				varying vec3 vPosition;
+
+				float wave(vec2 pos) {
+					float h = sin(pos.x * 0.08 + time * 1.1) * 2.2;
+					h += sin(pos.y * 0.1 + time * 0.95) * 1.8;
+					h += sin((pos.x * 0.15 + pos.y * 0.12) + time * 1.6) * 1.1;
+					h += sin(pos.x * 0.3 + time * 2.8) * 0.7;
+					return h * 0.6;
+				}
+
+				void main() {
+					vUv = uv;
+					vec3 pos = position;
+					
+					float height = wave(pos.xy);
+					pos.z = height;
+					
+					// Calculate normals
+					float eps = 0.15;
+					vec3 tangent = vec3(1.0, 0.0, (wave(pos.xy + vec2(eps, 0.0)) - height) / eps);
+					vec3 bitangent = vec3(0.0, 1.0, (wave(pos.xy + vec2(0.0, eps)) - height) / eps);
+					vNormal = normalize(cross(tangent, bitangent));
+					
+					vPosition = pos;
+					gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+				}
+			`,
+			fragmentShader: `
+				uniform float time;
+				uniform vec3 color;
+				varying vec2 vUv;
+				varying vec3 vNormal;
+				varying vec3 vPosition;
+
+				void main() {
+					vec3 normal = normalize(vNormal);
+					vec3 lightDir = normalize(vec3(0.6, 1.0, 0.4));
+					vec3 viewDir = normalize(vec3(0.0, 8.0, 18.0) - vPosition);
+					
+					float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 2.8);
+					vec3 halfDir = normalize(lightDir + viewDir);
+					float spec = pow(max(dot(normal, halfDir), 0.0), 128.0) * 3.5;
+					
+					vec3 deepColor = mix(color, vec3(0.0, 0.03, 0.12), 0.75);
+					vec3 surfaceColor = mix(deepColor, vec3(0.7, 0.9, 1.0), fresnel);
+					
+					// Dynamic caustics
+					float caustic = 0.5 + 0.5 * sin(vPosition.x * 12.0 + time * 4.0) * sin(vPosition.y * 10.0 + time * 3.2);
+					
+					vec3 finalColor = surfaceColor * (0.65 + caustic * 0.35) + vec3(0.9, 0.95, 1.0) * spec;
+					
+					// Foam on peaks
+					float foam = smoothstep(1.8, 3.2, vPosition.z) * 0.65;
+					finalColor = mix(finalColor, vec3(0.98, 0.99, 1.0), foam);
+					
+					gl_FragColor = vec4(finalColor, 0.96);
+				}
+			`,
+			transparent: true,
+			side: THREE.DoubleSide
+		});
+
+		const water = new THREE.Mesh(waterGeometry, waterMaterial);
+		water.rotation.x = -Math.PI / 2;
+		scene.add(water);
+
+		// Mouse cursor
+		const cursor = document.getElementById('cursor');
+		document.addEventListener('mousemove', (e) => {
+			cursor.style.left = e.clientX + 'px';
+			cursor.style.top = e.clientY + 'px';
+		});
+
+		// Animation
+		let time = 0;
+		function animate() {
+			requestAnimationFrame(animate);
+			time += 0.018;
+			
+			waterMaterial.uniforms.time.value = time;
+			
+			// Gentle camera movement for immersion
+			camera.position.x = Math.sin(time * 0.2) * 1.5;
+			camera.position.z = 18 + Math.cos(time * 0.15) * 2.0;
+			camera.position.y = 8 + Math.sin(time * 0.4) * 0.6;
+			camera.lookAt(0, 1.5, 0);
+			
+			renderer.render(scene, camera);
+		}
+		animate();
+
+		// Resize handler
+		window.addEventListener('resize', () => {
+			camera.aspect = window.innerWidth / window.innerHeight;
+			camera.updateProjectionMatrix();
+			renderer.setSize(window.innerWidth, window.innerHeight);
+		});
+	</script>
+</body>
+</html>
